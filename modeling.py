@@ -15,7 +15,6 @@
 """Transformer models."""
 
 from flax import nn
-import efficient_attention
 import layers
 from flax.training.common_utils import onehot
 import jax.numpy as jnp
@@ -62,13 +61,13 @@ class BertModel(nn.Module):
         features=config.hidden_size,
         embedding_init=get_kernel_init(config),
         name='type_embeddings')
-
+ 
     embeddings = word_embeddings + position_embeddings + type_embeddings
     embeddings = nn.LayerNorm(
         embeddings, epsilon=LAYER_NORM_EPSILON, name='embeddings_layer_norm')
     embeddings = nn.dropout(
         embeddings, rate=config.hidden_dropout_prob, deterministic=deterministic)
-
+ 
     # Transformer blocks
     feed_forward = layers.FeedForward.partial(
         d_ff=config.intermediate_size,
@@ -76,15 +75,12 @@ class BertModel(nn.Module):
         intermediate_activation=get_hidden_activation(config),
         kernel_init=get_kernel_init(config))
 
-    attention = efficient_attention.BertSelfAttention.partial(
+    attention = nn.SelfAttention.partial(
         num_heads=config.num_attention_heads,
-        num_parallel_heads=None,
-        d_qkv=config.hidden_size // config.num_attention_heads,
-        attention_dropout_rate=config.attention_probs_dropout_prob,
-        output_dropout_rate=config.hidden_dropout_prob,
+        qkv_features=config.hidden_size,
         kernel_init=get_kernel_init(config),
-        output_kernel_init=get_kernel_init(config))
-
+        dropout_rate=config.attention_probs_dropout_prob)
+ 
     hidden_states = embeddings
     mask = input_mask.astype(jnp.int32)
     for layer_num in range(config.num_hidden_layers):

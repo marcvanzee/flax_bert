@@ -53,8 +53,6 @@ class ClassificationDataPipeline(DataPipeline):
     # shard train here already to avoid unnecessary tokenization.
     dataset['train'] = dataset['train'].shard(jax.host_count(), jax.host_id())
 
-    print(f'Keys: {dataset.keys()}')
-    print(f'Train size: {len(dataset["train"])}')
     if isinstance(dataset, dict):
       single_split = dataset['train']
     else:

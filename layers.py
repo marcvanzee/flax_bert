@@ -76,7 +76,7 @@ class TransformerBlock(nn.Module):
             attention,
             deterministic: bool = False):
     """Applies TransformerBlock module."""
-    attention_output = attention(hidden_states, mask,
+    attention_output = attention(inputs_q=hidden_states, padding_mask=mask,
                                  deterministic=deterministic,
                                  name='self_attention')
     hidden_states = nn.LayerNorm(hidden_states + attention_output,

@@ -129,8 +129,8 @@ def load_params_from_hf(init_checkpoint, hidden_size, num_attention_heads):
     # Layers
     ('bert.encoder.layer.', 'bert.encoder_layer_'),
     # ('bert/encoder/layer_', 'bert/encoder_layer_'),
-    ('attention.self', 'self_attention.attn'),
-    ('attention.output.dense', 'self_attention.attn.output'),
+    ('attention.self', 'self_attention'),
+    ('attention.output.dense', 'self_attention.out'),
     ('attention.output.LayerNorm', 'self_attention_layer_norm'),
     ('output.LayerNorm', 'output_layer_norm'),
     ('intermediate.dense', 'feed_forward.intermediate'),
@@ -163,18 +163,19 @@ def load_params_from_hf(init_checkpoint, hidden_size, num_attention_heads):
     # Reshape kernels if necessary
     reshape_params = ['key', 'query', 'value']
     for key in reshape_params:
-      if f'self_attention.attn.{key}.kernel' in jax_key:
-        val = np.swapaxes(
-            val.reshape((hidden_size, num_attention_heads, -1)), 0, 1)
-      elif f'self_attention.attn.{key}.bias' in jax_key:
+      if f'self_attention.{key}.kernel' in jax_key:
+        # val = np.swapaxes(
+        val = val.reshape((hidden_size, num_attention_heads, -1)) # , 0, 1)
+      elif f'self_attention.{key}.bias' in jax_key:
         val = val.reshape((num_attention_heads, -1))
-    if 'self_attention.attn.output.kernel' in jax_key:
+    if 'self_attention.out.kernel' in jax_key:
       val = val.reshape((num_attention_heads, -1, hidden_size))
-    elif 'self_attention.attn.output.bias' in jax_key:
+    elif 'self_attention.out.bias' in jax_key:
       # The multihead attention implementation we use creates a bias vector for
       # each head, even though this is highly redundant.
-      val = np.stack(
-          [val] + [np.zeros_like(val)] * (num_attention_heads - 1), axis=0)
+      # val = np.stack(
+      #    [val] + [np.zeros_like(val)] * (num_attention_heads - 1), axis=0)
+      pass
 
     jax_params[jax_key] = val
 

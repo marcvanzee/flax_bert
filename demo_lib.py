@@ -29,6 +29,8 @@ from transformers import BertTokenizerFast
 
 import time
 
+import functools
+
 def get_config(init_checkpoint, dataset):
   hf_config = transformers.AutoConfig.from_pretrained(init_checkpoint)
   model_config = ml_collections.ConfigDict({
@@ -77,6 +79,7 @@ def create_model(config, initial_params):
   model = nn.Model(model_def, initial_params)
   return model
 
+
 def create_optimizer(config, model, initial_params):
   """Create a model, starting with a pre-trained checkpoint."""
   common_kwargs = dict(
@@ -93,6 +96,9 @@ def create_optimizer(config, model, initial_params):
   no_decay = optim.ModelParamTraversal(lambda path, _: 'bias' in path)
   optimizer_def = optim.MultiOptimizer(
     (decay, optimizer_decay_def), (no_decay, optimizer_no_decay_def))
+  # TODO(marcvanzee): MultiOptimizer triggers double XLA compilation on TPU so
+  # we use Adam here. This will be fixed in the next Flax release.
+  optimizer_def = optim.Adam(learning_rate=config.learning_rate)
   optimizer = optimizer_def.create(model)
   optimizer = optimizer.replicate()
   del model  # don't keep a copy of the initial model
@@ -144,54 +150,12 @@ def compute_classification_stats(model, batch):
   }
 
 
-def run_train(optimizer, data_pipeline, tokenizer, config):
-  tokenizer.model_max_length = config.max_seq_length
-  num_train_steps = get_num_train_steps(config, data_pipeline)
-
-  learning_rate_fn = get_learning_rate_fn(config, num_train_steps)
-  train_history = training.TrainStateHistory(learning_rate_fn)
-  train_state = train_history.initial_state()
-
-  t0 = time.time()
-  train_step_fn = training.create_train_step(
-    compute_loss_and_metrics, clip_grad_norm=1.0)
-  train_iter = data_pipeline.get_inputs(
-    split='train', batch_size=config.train_batch_size, training=True)
-  print(f'Input pipeline: {time.time()-t0}')
-
-  if jax.host_id() == 0:
-    print(f'\nStarting training on {config.dataset_name} for {num_train_steps} '
-          f'steps ({config.num_train_epochs:.0f} epochs)...\n')
-
-  for _, batch in zip(range(0, num_train_steps), train_iter):
-    optimizer, train_state = train_step_fn(optimizer, batch, train_state)
-
-  if jax.host_id() == 0:
-    print('\nFinished training.')
-
-  return optimizer
-
-def run_eval(optimizer, data_pipeline, config):
-  # if jax.host_id() != 0:
-  #    return
-
-  eval_step = training.create_eval_fn(compute_classification_stats)
-
-  if config.dataset_name == 'mnli':
-    validation_splits = ['validation_matched', 'validation_mismatched']
+def get_validation_splits(dataset_name):
+  if dataset_name == 'mnli':
+    return ['validation_matched', 'validation_mismatched']
   else:
-    validation_splits = ['validation']
+    return ['validation']
 
-  for split in validation_splits:
-    eval_iter = data_pipeline.get_inputs(
-        split='validation', batch_size=config.eval_batch_size, training=False)
-    eval_stats = eval_step(optimizer, eval_iter)
-    eval_metric = datasets.load_metric(config.dataset_path, config.dataset_name)
-    eval_metric.add_batch(
-      predictions=eval_stats['prediction'],
-      references=eval_stats['label'])
-    eval_metrics = eval_metric.compute()
-    print('\nRunning eval...\n')
-    prefix = 'eval_mismatched' if split == 'validation_mismatched' else 'eval'
-    for name, val in sorted(eval_metrics.items()):
-      print(f'{prefix}_{name} = {val:.06f}', flush=True)
+
+def get_prefix(split):
+  return 'eval_mismatched' if split == 'validation_mismatched' else 'eval' 

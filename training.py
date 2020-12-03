@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 from flax import struct
+from flax import nn
 from flax.training import common_utils
 import jax
 from jax import numpy as jnp
@@ -32,7 +33,6 @@ def create_learning_rate_scheduler(
     steps_per_decay=20000,
     steps_per_cycle=100000):
   """Creates learning rate schedule.
-
   Interprets factors in the factors string which can consist of:
   * constant: interpreted as the constant value,
   * linear_warmup: interpreted as linear warmup until warmup_steps,
@@ -40,7 +40,6 @@ def create_learning_rate_scheduler(
   * decay_every: Every k steps decay the learning rate by decay_factor.
   * cosine_decay: Cyclic cosine decay, uses steps_per_cycle parameter.
   * linear_decay: Linear decay, uses steps_per_cycle parameter.
-
   Args:
     factors: a string with factors separated by '*' that defines the schedule.
     base_learning_rate: float, the starting constant for the lr schedule.
@@ -48,7 +47,6 @@ def create_learning_rate_scheduler(
     decay_factor: The amount to decay the learning rate by.
     steps_per_decay: How often to decay the learning rate.
     steps_per_cycle: Steps per cycle when using cosine decay.
-
   Returns:
     a function learning_rate(step): float -> {'learning_rate': float}, the
     step-dependent lr.
@@ -88,7 +86,6 @@ def create_learning_rate_scheduler(
 
 class TrainStateHistory:
   """Container for training history/metrics.
-
   The eventual design goal is to have this container store a long of all
   training metrics, as well as handle logging them (including to tensorboard).
   The learning rate can be a function of training history, for example in
@@ -141,7 +138,6 @@ class TrainStateHistory:
 @struct.dataclass
 class TrainState:
   """Container for misc training state that's not handeled by the optimizer.
-
   This includes:
   - The base RNG key for each step, replicated across devices.
   - Any metrics output by the training step (that are then logged to the history
@@ -168,9 +164,36 @@ class TrainState:
     return self.replace(step=None, metrics=None)
 
 
-def create_train_step(loss_and_metrics_fn, clip_grad_norm=None):
+def compute_loss_and_metrics(model, batch, rng):
+  """Compute cross-entropy loss for classification tasks."""
+  with nn.stochastic(rng):
+    metrics = model(
+        batch['input_ids'],
+        (batch['input_ids'] > 0).astype(np.int32),
+        batch['token_type_ids'],
+        batch['label'])
+  return metrics['loss'], metrics
+
+
+def compute_classification_stats(model, batch):
+  with nn.stochastic(jax.random.PRNGKey(0)):
+    y = model(
+        batch['input_ids'],
+        (batch['input_ids'] > 0).astype(np.int32),
+        batch['token_type_ids'],
+        deterministic=True)
+  return {
+      'idx': batch['idx'],
+      'label': batch['label'],
+      'prediction': y.argmax(-1)
+  }
+
+
+def create_train_step(clip_grad_norm=None):
   """Constructs a function that runs a single training update."""
+  loss_and_metrics_fn = compute_loss_and_metrics
   def train_step(optimizer, batch, train_state):
+    print('Compiling train (takes about 20s)')
     rng, new_rng = jax.random.split(train_state.rng)
     grad_fn = jax.value_and_grad(
         lambda model: loss_and_metrics_fn(model, batch, rng), has_aux=True)
@@ -196,8 +219,9 @@ def create_train_step(loss_and_metrics_fn, clip_grad_norm=None):
   return distributed_train_step
 
 
-def create_eval_fn(stat_fn, sample_feature_name='idx'):
+def create_eval_fn(sample_feature_name='idx'):
   """Constructs a function that runs evaluation given a batched data stream."""
+  stat_fn = compute_classification_stats
   p_stat_fn = jax.pmap(stat_fn, axis_name='batch')
   n_devices = jax.local_device_count()
 
